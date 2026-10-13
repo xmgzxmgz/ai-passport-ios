@@ -1,0 +1,19 @@
+# Xcode / 构建产物
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# 本地打包产物
+Payload/
+*.ipa
+compile.log
+
+# macOS
+.DS_Store
+
+# Python 工具缓存
+__pycache__/
+*.pyc

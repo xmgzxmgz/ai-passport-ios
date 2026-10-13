@@ -1,0 +1,176 @@
+# 在 GitHub 的 macOS 虚拟机上构建 iOS 版（本地是 Windows，没有 Xcode）
+#
+# 触发：推送到 main/master，或在 Actions 页面手动 Run workflow
+# 成功：打出 PassportSlot-unsigned.ipa → 上传 Artifact + 建 Release（Release 里的 ipa 无需登录即可下载）
+# 失败：把编译报错日志提交回 ci/last-build-failure.log，方便远程排查
+#
+# 仓库按「本目录即仓库根」布局，工程在仓库根下的 PassportSlot.xcodeproj
+
+name: 构建未签名 IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "ci/**"
+      - "**/*.md"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    env:
+      PROJECT: PassportSlot.xcodeproj
+      SCHEME: PassportSlot
+      DERIVED: build
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 工具链版本
+        run: |
+          xcodebuild -version
+          swift --version
+          sw_vers
+
+      - name: 列出 scheme
+        run: xcodebuild -project "$PROJECT" -list
+
+      - name: 编译 Release（关闭签名）
+        id: compile
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$DERIVED" \
+            -destination "generic/platform=iOS" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tee compile.log
+
+      - name: 失败时把编译日志写回仓库
+        if: steps.compile.outcome == 'failure'
+        run: |
+          mkdir -p ci
+          {
+            echo "# PassportSlot 编译失败日志"
+            echo
+            echo "- 提交：\`${GITHUB_SHA}\`"
+            echo "- 运行：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- 时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo
+            echo "## 报错与告警"
+            echo
+            echo '```'
+            grep -nE "error:|fatal error|warning: .*(unused|never used|deprecated)" compile.log | head -300
+            echo '```'
+            echo
+            echo "## 编译尾部输出"
+            echo
+            echo '```'
+            tail -120 compile.log
+            echo '```'
+          } > ci/last-build-failure.log
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f ci/last-build-failure.log
+          git commit -m "ci: 编译失败日志 [skip ci]" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}" || true
+
+      - name: 打包未签名 ipa
+        if: steps.compile.outcome == 'success'
+        run: |
+          set -euo pipefail
+          APP=$(find "$DERIVED/Build/Products/Release-iphoneos" -maxdepth 1 -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::编译返回成功但找不到 .app 产物"
+            exit 1
+          fi
+          echo "产物：$APP"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry PassportSlot-unsigned.ipa Payload
+          ls -lh PassportSlot-unsigned.ipa
+          {
+            echo "IPA_SHA256=$(shasum -a 256 PassportSlot-unsigned.ipa | awk '{print $1}')"
+            echo "APP_BUNDLE_ID=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Info.plist")"
+            echo "APP_VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist")"
+            echo "APP_MIN_OS=$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP/Info.plist")"
+          } >> "$GITHUB_ENV"
+
+      - name: 上传 Artifact
+        if: steps.compile.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: PassportSlot-unsigned-ipa
+          path: PassportSlot-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 发布 Release 并附上 ipa
+        if: steps.compile.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v${APP_VERSION}-build${GITHUB_RUN_NUMBER}"
+          NOTES=$(printf '%s\n' \
+            "## PassportSlot ${APP_VERSION}（未签名 ipa）" \
+            "" \
+            "AI Passport 玩法槽安装器的 iOS 版。直连设备蓝牙写入玩法槽，替代安卓端 App。" \
+            "" \
+            "| 项 | 值 |" \
+            "| --- | --- |" \
+            "| Bundle ID | \`${APP_BUNDLE_ID}\` |" \
+            "| 最低系统 | iOS ${APP_MIN_OS} |" \
+            "| ipa SHA-256 | \`${IPA_SHA256}\` |" \
+            "| 构建提交 | \`${GITHUB_SHA}\` |" \
+            "" \
+            "### 侧载到 iPhone（免费 Apple ID 即可）" \
+            "1. 电脑装 [Sideloadly](https://sideloadly.io)，iPhone 用数据线连电脑" \
+            "2. 把本页的 \`PassportSlot-unsigned.ipa\` 拖进 Sideloadly，填 Apple ID" \
+            "3. iPhone 上到「设置 → 通用 → VPN与设备管理」信任该开发者" \
+            "4. 免费账号签名 **7 天过期**，到期用同一流程重签即可" \
+            "" \
+            "### 首次使用" \
+            "1. 打开 App，点「连接设备」，选 \`PassportNotify\`" \
+            "2. 首次连接会要求安全配对：**设备屏幕显示 6 位数字**，输入 iPhone 的配对弹窗" \
+            "3. 去官网玩法库下载固件，或从「文件」导入 .bin" \
+            "4. 选固件 → 选槽位 → 等进度条走完，然后在设备上按键切换玩法" \
+            "" \
+            "> 设备空闲会自动休眠断开蓝牙，按一下机身按键即可唤醒。")
+          gh release create "$TAG" \
+            --title "PassportSlot ${APP_VERSION} · 未签名 ipa (build ${GITHUB_RUN_NUMBER})" \
+            --notes "$NOTES" \
+            PassportSlot-unsigned.ipa
+          echo "Release 已发布：$TAG"
+
+      - name: 编译通过后清除历史失败日志
+        if: steps.compile.outcome == 'success'
+        continue-on-error: true
+        run: |
+          if [ -f ci/last-build-failure.log ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git rm -q -f ci/last-build-failure.log
+            git commit -m "ci: 编译已通过，清除失败日志 [skip ci]"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
