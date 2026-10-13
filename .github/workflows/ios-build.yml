@@ -174,3 +174,14 @@ jobs:
             git commit -m "ci: 编译已通过，清除失败日志 [skip ci]"
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
+
+      # 编译步骤用了 continue-on-error 才能把日志写回仓库，
+      # 但那会让失败的运行也显示成绿色 ✓，所以在这里补一次显式失败。
+      - name: 标记构建结果
+        if: always()
+        run: |
+          if [ "${{ steps.compile.outcome }}" != "success" ]; then
+            echo "::error::编译失败 —— 报错已写入 ci/last-build-failure.log，也可在本次运行的日志页查看"
+            exit 1
+          fi
+          echo "编译成功，ipa 已发布到 Release"

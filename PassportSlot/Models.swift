@@ -143,6 +143,12 @@ struct FirmwareImage: Identifiable, Codable, Equatable {
 //       → { "plays": [...], "allTotal": N }
 // title / description 是多语言对象：{ "zh": "...", "en": "..." }
 
+/// 目录分页响应外壳：GET /api/plays?limit=50&page=N
+struct CatalogEnvelope: Decodable {
+    var plays: [CatalogItem]
+    var allTotal: Int?
+}
+
 struct CatalogItem: Identifiable, Codable, Equatable {
     var id: Int
     var title: String
