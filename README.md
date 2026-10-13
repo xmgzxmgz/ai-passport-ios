@@ -9,6 +9,31 @@
 
 ---
 
+## 零、直接下载（已构建好，无需 Mac）
+
+已经用 GitHub Actions 的 macOS 机器编译并发布，未签名 ipa 从这里拿：
+
+**→ [最新 Release](https://github.com/xmgzxmgz/ai-passport-ios/releases/latest)**
+
+| 项 | 值 |
+| --- | --- |
+| 文件 | `PassportSlot-unsigned.ipa`（约 258 KB） |
+| Bundle ID | `cn.folotoy.passportslot` |
+| 最低系统 | iOS 17.0（arm64） |
+| 签名 | 未签名 —— 需自己侧载签名 |
+
+侧载步骤（免费 Apple ID 即可）：
+
+1. 电脑装 [Sideloadly](https://sideloadly.io)，iPhone 用数据线连电脑
+2. 把 ipa 拖进 Sideloadly，填 Apple ID，Start
+3. iPhone 上「设置 → 通用 → VPN与设备管理」信任该开发者
+4. 免费账号签名 **7 天过期**，到期重复上述流程重签
+
+> 想自己编译也行：有 Mac 就 `open PassportSlot.xcodeproj` 直接 Run；
+> 没有 Mac 就 fork 本仓库，Actions 页面点一次 `Run workflow`。
+
+---
+
 ## 一、目录结构
 
 ```
